@@ -1,0 +1,353 @@
+# Simple Honeypot System with Machine Learning
+## A Practical Implementation Guide
+
+### 1. Project Structure
+```
+honeypot/
+├── static/
+│   ├── style.css
+│   └── script.js
+├── templates/
+│   └── dashboard.html
+├── data/
+│   └── attacks.json
+├── honeypot.py
+├── ml_detector.py
+└── requirements.txt
+```
+
+### 2. Core Honeypot Implementation (honeypot.py)
+```python
+import socket
+import json
+import threading
+import datetime
+from ml_detector import ThreatDetector
+
+class Honeypot:
+    def __init__(self, ports):
+        self.ports = ports
+        self.attacks = self.load_attacks()
+        self.detector = ThreatDetector()
+        
+    def load_attacks(self):
+        try:
+            with open('data/attacks.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return []
+    
+    def save_attack(self, attack_data):
+        self.attacks.append(attack_data)
+        with open('data/attacks.json', 'w') as f:
+            json.dump(self.attacks, f, indent=2)
+    
+    def handle_connection(self, client_socket, port, address):
+        timestamp = datetime.datetime.now().isoformat()
+        
+        # Collect connection data
+        data = {
+            'timestamp': timestamp,
+            'ip': address[0],
+            'port': port,
+            'data': client_socket.recv(1024).decode('utf-8', errors='ignore')
+        }
+        
+        # Extract features for ML
+        features = self.detector.extract_features(data)
+        threat_score = self.detector.predict(features)
+        
+        # Save attack data
+        attack_data = {
+            **data,
+            'threat_score': float(threat_score),
+            'is_threat': bool(threat_score > 0.7)
+        }
+        self.save_attack(attack_data)
+        
+        # Send fake response
+        client_socket.send(b'SSH-2.0-OpenSSH_8.2p1\r\n')
+        client_socket.close()
+    
+    def start_service(self, port):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(('0.0.0.0', port))
+        server.listen(5)
+        
+        while True:
+            client, address = server.accept()
+            thread = threading.Thread(
+                target=self.handle_connection,
+                args=(client, port, address)
+            )
+            thread.start()
+    
+    def start(self):
+        for port in self.ports:
+            thread = threading.Thread(
+                target=self.start_service,
+                args=(port,)
+            )
+            thread.daemon = True
+            thread.start()
+            print(f'Started honeypot on port {port}')
+
+# Usage
+if __name__ == '__main__':
+    honeypot = Honeypot([22, 80, 443])  # Monitor SSH and HTTP ports
+    honeypot.start()
+```
+
+### 3. Machine Learning Implementation (ml_detector.py)
+```python
+import numpy as np
+from sklearn.ensemble import IsolationForest
+import pickle
+import datetime
+
+class ThreatDetector:
+    def __init__(self):
+        self.model = IsolationForest(
+            contamination=0.1,
+            random_state=42
+        )
+        self.feature_names = [
+            'bytes_per_second',
+            'connection_duration',
+            'hour_of_day',
+            'is_weekend'
+        ]
+    
+    def extract_features(self, connection_data):
+        """Extract features from connection data."""
+        dt = datetime.datetime.fromisoformat(connection_data['timestamp'])
+        
+        features = {
+            'bytes_per_second': len(connection_data['data']),
+            'connection_duration': 0,  # Initially 0
+            'hour_of_day': dt.hour,
+            'is_weekend': dt.weekday() >= 5
+        }
+        
+        return np.array([features[name] for name in self.feature_names])
+    
+    def train(self, connection_data_list):
+        """Train the model on historical connection data."""
+        X = np.array([
+            self.extract_features(data)
+            for data in connection_data_list
+        ])
+        self.model.fit(X)
+    
+    def predict(self, features):
+        """Predict if a connection is anomalous."""
+        # Returns score between 0 and 1
+        # Higher score = more likely to be an attack
+        score = self.model.score_samples([features])
+        return 1 - (score + 4) / 8  # Normalize to 0-1
+```
+
+### 4. Simple Dashboard (templates/dashboard.html)
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Honeypot Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Honeypot Security Dashboard</h1>
+        
+        <div class="stats">
+            <div class="stat-box">
+                <h3>Total Attacks</h3>
+                <p id="total-attacks">0</p>
+            </div>
+            <div class="stat-box">
+                <h3>High Threats</h3>
+                <p id="high-threats">0</p>
+            </div>
+        </div>
+        
+        <div class="recent-attacks">
+            <h2>Recent Attacks</h2>
+            <table id="attacks-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>IP</th>
+                        <th>Port</th>
+                        <th>Threat Score</th>
+                    </tr>
+                </thead>
+                <tbody id="attacks-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
+```
+
+### 5. Simple Styling (static/style.css)
+```css
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #f0f2f5;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.stats {
+    display: flex;
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.stat-box {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    flex: 1;
+}
+
+.recent-attacks {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.high-threat {
+    background: #ffe6e6;
+}
+```
+
+### 6. Dashboard Updates (static/script.js)
+```javascript
+function updateDashboard() {
+    fetch('/api/attacks')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('total-attacks').textContent = data.length;
+            
+            const highThreats = data.filter(attack => attack.threat_score > 0.7);
+            document.getElementById('high-threats').textContent = highThreats.length;
+            
+            const tbody = document.getElementById('attacks-body');
+            tbody.innerHTML = '';
+            
+            data.slice(-10).reverse().forEach(attack => {
+                const row = document.createElement('tr');
+                if (attack.threat_score > 0.7) {
+                    row.classList.add('high-threat');
+                }
+                
+                row.innerHTML = `
+                    <td>${new Date(attack.timestamp).toLocaleString()}</td>
+                    <td>${attack.ip}</td>
+                    <td>${attack.port}</td>
+                    <td>${(attack.threat_score * 100).toFixed(1)}%</td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        });
+}
+
+// Update every 5 seconds
+setInterval(updateDashboard, 5000);
+updateDashboard();
+```
+
+### 7. How It Works
+
+1. **Port Monitoring:**
+   - The honeypot listens on specified ports (22, 80, 443)
+   - Each connection attempt is handled in a separate thread
+   - Connection details are logged to attacks.json
+
+2. **Machine Learning:**
+   - Uses Isolation Forest for anomaly detection
+   - Features include:
+     - Bytes per second (connection size)
+     - Time of day patterns
+     - Weekend vs weekday patterns
+   - Scores connections from 0-1 (higher = more suspicious)
+
+3. **Data Storage:**
+   - All attacks stored in attacks.json
+   - Format:
+```json
+[
+  {
+    "timestamp": "2025-02-13T14:23:45",
+    "ip": "192.168.1.100",
+    "port": 22,
+    "data": "SSH-2.0-OpenSSH_7.9",
+    "threat_score": 0.85,
+    "is_threat": true
+  }
+]
+```
+
+### 8. Running the System
+
+1. Install requirements:
+```bash
+pip install scikit-learn flask numpy
+```
+
+2. Start the honeypot:
+```bash
+python honeypot.py
+```
+
+3. View the dashboard at http://localhost:5000
+
+### 9. Security Considerations
+
+1. **Isolation:**
+   - Run in isolated environment
+   - Use separate network if possible
+   - Never run on production systems
+
+2. **Monitoring:**
+   - Check logs regularly
+   - Set up alerts for high threats
+   - Monitor system resources
+
+3. **Legal:**
+   - Check local regulations
+   - Document all activities
+   - Consider privacy implications
+
+### 10. Learning from Attacks
+
+The system helps you learn:
+- Common attack patterns
+- Peak attack times
+- Most targeted services
+- Unusual behavior patterns
+- Attack source locations
+
+This implementation provides a good balance of simplicity and functionality while maintaining security awareness.
