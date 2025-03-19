@@ -1,4 +1,4 @@
-# Honeypot AI - Your First Cybersecurity Project
+# Honeypot AI
 
 ## What is a Honeypot?
 
@@ -22,7 +22,7 @@ This project creates a fake computer system that:
 
 1. Download this project to your computer:
    ```
-   git clone https://github.com/yourusername/honeypot-ai.git
+   git clone https://github.com/mgkram4/honeypot-ai.git
    cd honeypot-ai
    ```
 
